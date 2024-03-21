@@ -1,0 +1,5 @@
+whisper_arch = "large-v3"
+device = "cuda"
+compute_type = "int8"
+
+wav2vec_langs = "en,ru,fr"
