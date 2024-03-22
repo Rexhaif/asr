@@ -4,3 +4,5 @@ compute_type = "int8"
 
 wav2vec_langs = "en,ru,fr"
 batch_size = 4
+
+max_size_mb = 1024

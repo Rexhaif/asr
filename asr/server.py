@@ -11,7 +11,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.gzip import GZipMiddleware
 
 from .config import settings
-from .utils import UnsupportedLanguageException, convert_audio, setup_logging
+from .utils import UnsupportedLanguageException, LimitUploadSize, convert_audio, setup_logging
 
 setup_logging()
 
@@ -28,6 +28,10 @@ app.add_middleware(
 app.add_middleware(
     GZipMiddleware,
     compresslevel=9,
+)
+app.add_middleware(
+    LimitUploadSize,
+    max_upload_size=settings.max_size_mb
 )
 
 # == Global variables ==
@@ -118,6 +122,7 @@ async def asr(
     min_speakers: int = 1,
     max_speakers: int | None = None,
 ):
+
     loop = asyncio.get_running_loop()
     input_data: bytes = await request.body()
     logger.info(
