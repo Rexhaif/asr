@@ -10,8 +10,8 @@ from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoin
 from starlette.requests import Request
 from starlette.responses import Response
 from starlette.types import ASGIApp
-from .config import settings
 
+logger = logging.getLogger(__name__)
 
 def setup_logging():
 
@@ -91,6 +91,7 @@ class LimitUploadSize(BaseHTTPMiddleware):
             if 'content-length' not in request.headers:
                 return Response(status_code=status.HTTP_411_LENGTH_REQUIRED)
             content_length = int(request.headers['content-length'])
+            logger.info(f"Request with content-length = {content_length / 1024 / 1024:.4f} MB")
             if content_length > self.max_upload_size:
                 return Response(status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE)
         return await call_next(request)

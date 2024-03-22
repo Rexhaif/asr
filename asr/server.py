@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import time
+from contextlib import asynccontextmanager
 from concurrent.futures import ProcessPoolExecutor
 from functools import partial
 
@@ -9,6 +10,7 @@ import numpy as np
 import whisperx as wx
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.gzip import GZipMiddleware
+import sentry_sdk
 
 from .config import settings
 from .utils import UnsupportedLanguageException, LimitUploadSize, convert_audio, setup_logging
@@ -17,32 +19,15 @@ setup_logging()
 
 logger = logging.getLogger(__name__)
 
-app = ft.FastAPI(title="WhisperX ASR API")
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-app.add_middleware(
-    GZipMiddleware,
-    compresslevel=9,
-)
-app.add_middleware(
-    LimitUploadSize,
-    max_upload_size=settings.max_size_mb
-)
-
 # == Global variables ==
+wav2vec_models = {}
 whisper_model = None
-wav2vec_models: dict[str, any] = {}
 diarization_model = None
+executor = None
 # ======================
 
 def load_models():
     global whisper_model, wav2vec_models, diarization_model
-
     if whisper_model is None:
         logger.info(
             f"Loading Whisper model: {settings.whisper_arch} for {settings.device} device"
@@ -71,6 +56,55 @@ def load_models():
         diarization_model = wx.DiarizationPipeline(
             device=settings.device, use_auth_token=settings.hub_token
         )
+
+
+@asynccontextmanager
+async def lifespan_fn(app: ft.FastAPI):
+    global executor
+    executor = ProcessPoolExecutor(
+        max_workers=1, 
+        initializer=load_models
+    )
+    def shutdown_fn():
+        logger.info("Shutting down executor")
+        executor.shutdown(wait=False)
+
+    try:
+        yield
+    except asyncio.exceptions.CancelledError as e:
+        logger.info(f"Silenced exception: {str(e)}")
+        pass
+
+    shutdown_fn()
+
+if settings.use_sentry:
+    sentry_sdk.init(
+        dsn=settings.sentry_dsn,
+        enable_tracing=True,
+        traces_sample_rate=1.0,
+        profiles_sample_rate=1.0,
+    )
+
+app = ft.FastAPI(
+    title="WhisperX ASR API",
+    lifespan=lifespan_fn,
+)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+app.add_middleware(
+    GZipMiddleware,
+    compresslevel=9,
+)
+app.add_middleware(
+    LimitUploadSize,
+    max_upload_size=settings.max_size_mb * 1024 * 1024,
+)
+
 
 def whisperx_predict(
     audio_input: np.ndarray,
@@ -124,9 +158,11 @@ async def asr(
 ):
 
     loop = asyncio.get_running_loop()
+    t1 = time.perf_counter()
     input_data: bytes = await request.body()
+    t2 = time.perf_counter()
     logger.info(
-        f"Received audio data of length {(len(input_data) / 1024 / 1024):.4f} MB"
+        f"Received audio data: length={(len(input_data) / 1024 / 1024):.4f} MB / speed={len(input_data) / (t2-t1) / 1024 / 1024:.4f} MB/s"
     )
     input_tensor: np.ndarray = await convert_audio(audio_binary=input_data)
 
@@ -138,10 +174,12 @@ async def asr(
         max_speakers=max_speakers,
     )
 
-    with ProcessPoolExecutor(max_workers=1, initializer=load_models) as executor:
-        t1 = time.perf_counter()
-        transcription = await loop.run_in_executor(executor=executor, func=fn)
-        t2 = time.perf_counter()
-        logger.info(f"Took {t2-t1:.3f} seconds to process the audio")
+    t1 = time.perf_counter()
+    transcription = await loop.run_in_executor(
+        executor=executor, 
+        func=fn
+    )
+    t2 = time.perf_counter()
+    logger.info(f"Took {t2-t1:.3f} seconds to process the audio")
 
     return transcription

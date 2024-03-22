@@ -6,3 +6,5 @@ wav2vec_langs = "en,ru,fr"
 batch_size = 4
 
 max_size_mb = 1024
+
+use_sentry = true
